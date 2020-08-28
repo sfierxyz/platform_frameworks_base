@@ -73,14 +73,11 @@ import com.android.server.pm.UserRestrictionsUtils;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -259,47 +256,6 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                     }
                 }
             };
-
-    public boolean onFactoryReset() {
-        // Wait for stable state if bluetooth is temporary state.
-        int state = getState();
-        if (state == BluetoothAdapter.STATE_BLE_TURNING_ON
-                || state == BluetoothAdapter.STATE_TURNING_ON
-                || state == BluetoothAdapter.STATE_TURNING_OFF) {
-            if (!waitForState(new HashSet<Integer>(Arrays.asList(BluetoothAdapter.STATE_BLE_ON,
-                      BluetoothAdapter.STATE_ON)))) {
-                return false;
-            }
-        }
-
-        // Clear registered LE apps to force shut-off Bluetooth
-        clearBleApps();
-        state = getState();
-        try {
-            mBluetoothLock.readLock().lock();
-            if (mBluetooth == null) {
-                return false;
-            }
-            if (state == BluetoothAdapter.STATE_BLE_ON) {
-                addActiveLog(
-                        BluetoothProtoEnums.ENABLE_DISABLE_REASON_FACTORY_RESET,
-                        mContext.getPackageName(), false);
-                mBluetooth.onBrEdrDown();
-                return true;
-            } else if (state == BluetoothAdapter.STATE_ON) {
-                addActiveLog(
-                        BluetoothProtoEnums.ENABLE_DISABLE_REASON_FACTORY_RESET,
-                        mContext.getPackageName(), false);
-                mBluetooth.disable();
-                return true;
-            }
-        } catch (RemoteException e) {
-            Slog.e(TAG, "Unable to shutdown Bluetooth", e);
-        } finally {
-            mBluetoothLock.readLock().unlock();
-        }
-        return false;
-    }
 
     private final ContentObserver mAirplaneModeObserver = new ContentObserver(null) {
         @Override
@@ -1671,9 +1627,7 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                         // the previous Bluetooth process has exited. The
                         // waiting period has three components:
                         // (a) Wait until the local state is STATE_OFF. This
-                        //     is accomplished by
-                        //     "waitForState(new HashSet<Integer>(
-                        //     Arrays.asList(BluetoothAdapter.STATE_OFF)))".
+                        //     is accomplished by "waitForOnOff(false, true)".
                         // (b) Wait until the STATE_OFF state is updated to
                         //     all components.
                         // (c) Wait until the Bluetooth process exits, and
@@ -1683,8 +1637,7 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                         // message. On slower devices, that delay needs to be
                         // on the order of (2 * SERVICE_RESTART_TIME_MS).
                         //
-                        waitForState(new HashSet<Integer>(Arrays.asList(
-                                BluetoothAdapter.STATE_OFF)));
+                        waitForOnOff(false, true);
                         Message restartMsg =
                                 mHandler.obtainMessage(MESSAGE_RESTART_BLUETOOTH_SERVICE);
                         mHandler.sendMessageDelayed(restartMsg, 2 * SERVICE_RESTART_TIME_MS);
@@ -1697,16 +1650,10 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                     }
                     mHandler.removeMessages(MESSAGE_RESTART_BLUETOOTH_SERVICE);
                     if (mEnable && mBluetooth != null) {
-                        waitForState(new HashSet<Integer>(Arrays.asList(
-                                BluetoothAdapter.STATE_ON)));
+                        waitForOnOff(true, false);
                         mEnable = false;
                         handleDisable();
-                        waitForState(new HashSet<Integer>(Arrays.asList(BluetoothAdapter.STATE_OFF,
-                                BluetoothAdapter.STATE_TURNING_ON,
-                                BluetoothAdapter.STATE_TURNING_OFF,
-                                BluetoothAdapter.STATE_BLE_TURNING_ON,
-                                BluetoothAdapter.STATE_BLE_ON,
-                                BluetoothAdapter.STATE_BLE_TURNING_OFF)));
+                        waitForOnOff(false, false);
                     } else {
                         mEnable = false;
                         handleDisable();
@@ -1835,15 +1782,9 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                     }
 
                     if (!mEnable) {
-                        waitForState(new HashSet<Integer>(Arrays.asList(
-                                BluetoothAdapter.STATE_ON)));
+                        waitForOnOff(true, false);
                         handleDisable();
-                        waitForState(new HashSet<Integer>(Arrays.asList(BluetoothAdapter.STATE_OFF,
-                                BluetoothAdapter.STATE_TURNING_ON,
-                                BluetoothAdapter.STATE_TURNING_OFF,
-                                BluetoothAdapter.STATE_BLE_TURNING_ON,
-                                BluetoothAdapter.STATE_BLE_ON,
-                                BluetoothAdapter.STATE_BLE_TURNING_OFF)));
+                        waitForOnOff(false, false);
                     }
                     break;
                 }
@@ -1875,8 +1816,7 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                             == BluetoothAdapter.STATE_OFF)) {
                         if (mEnable) {
                             Slog.d(TAG, "Entering STATE_OFF but mEnabled is true; restarting.");
-                            waitForState(new HashSet<Integer>(Arrays.asList(
-                                    BluetoothAdapter.STATE_OFF)));
+                            waitForOnOff(false, true);
                             Message restartMsg =
                                     mHandler.obtainMessage(MESSAGE_RESTART_BLUETOOTH_SERVICE);
                             mHandler.sendMessageDelayed(restartMsg, 2 * SERVICE_RESTART_TIME_MS);
@@ -1999,8 +1939,7 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                             mState = BluetoothAdapter.STATE_TURNING_ON;
                         }
 
-                        waitForState(new HashSet<Integer>(Arrays.asList(
-                                BluetoothAdapter.STATE_ON)));
+                        waitForOnOff(true, false);
 
                         if (mState == BluetoothAdapter.STATE_TURNING_ON) {
                             bluetoothStateChangeHandler(mState, BluetoothAdapter.STATE_ON);
@@ -2015,9 +1954,7 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                         bluetoothStateChangeHandler(BluetoothAdapter.STATE_ON,
                                 BluetoothAdapter.STATE_TURNING_OFF);
 
-                        boolean didDisableTimeout =
-                                !waitForState(new HashSet<Integer>(Arrays.asList(
-                                    BluetoothAdapter.STATE_OFF)));
+                        boolean didDisableTimeout = !waitForOnOff(false, true);
 
                         bluetoothStateChangeHandler(BluetoothAdapter.STATE_TURNING_OFF,
                                 BluetoothAdapter.STATE_OFF);
@@ -2269,7 +2206,12 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
         }
     }
 
-    private boolean waitForState(Set<Integer> states) {
+    /**
+     *  if on is true, wait for state become ON
+     *  if off is true, wait for state become OFF
+     *  if both on and off are false, wait for state not ON
+     */
+    private boolean waitForOnOff(boolean on, boolean off) {
         int i = 0;
         while (i < 10) {
             try {
@@ -2277,8 +2219,18 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                 if (mBluetooth == null) {
                     break;
                 }
-                if (states.contains(mBluetooth.getState())) {
-                    return true;
+                if (on) {
+                    if (mBluetooth.getState() == BluetoothAdapter.STATE_ON) {
+                        return true;
+                    }
+                } else if (off) {
+                    if (mBluetooth.getState() == BluetoothAdapter.STATE_OFF) {
+                        return true;
+                    }
+                } else {
+                    if (mBluetooth.getState() != BluetoothAdapter.STATE_ON) {
+                        return true;
+                    }
                 }
             } catch (RemoteException e) {
                 Slog.e(TAG, "getState()", e);
@@ -2286,10 +2238,14 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
             } finally {
                 mBluetoothLock.readLock().unlock();
             }
-            SystemClock.sleep(300);
+            if (on || off) {
+                SystemClock.sleep(300);
+            } else {
+                SystemClock.sleep(50);
+            }
             i++;
         }
-        Slog.e(TAG, "waitForState " + states + " time out");
+        Slog.e(TAG, "waitForOnOff time out");
         return false;
     }
 
@@ -2350,7 +2306,7 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                 mContext.getPackageName(), false);
         handleDisable();
 
-        waitForState(new HashSet<Integer>(Arrays.asList(BluetoothAdapter.STATE_OFF)));
+        waitForOnOff(false, true);
 
         sendBluetoothServiceDownCallback();
 
@@ -2512,8 +2468,6 @@ class BluetoothManagerService extends IBluetoothManager.Stub {
                 return "USER_SWITCH";
             case BluetoothProtoEnums.ENABLE_DISABLE_REASON_RESTORE_USER_SETTING:
                 return "RESTORE_USER_SETTING";
-            case BluetoothProtoEnums.ENABLE_DISABLE_REASON_FACTORY_RESET:
-                return "FACTORY_RESET";
             case BluetoothProtoEnums.ENABLE_DISABLE_REASON_UNSPECIFIED:
             default: return "UNKNOWN[" + reason + "]";
         }
