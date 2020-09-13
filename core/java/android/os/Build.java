@@ -1029,7 +1029,7 @@ public class Build {
     public static final String FINGERPRINT = deriveFingerprint();
 
     /** @hide */
-    public static final String HENTAI_FINGERPRINT = getString("ro.build.date");
+    public static final String HENTAI_FINGERPRINT = getString("ro.system.hentai.version");
 
     /**
      * Some devices split the fingerprint components between multiple
