@@ -17,7 +17,6 @@
 package com.android.systemui.biometrics;
 
 import android.content.Context;
-import android.content.pm.PackageManager;
 import android.util.Slog;
 import android.view.View;
 
@@ -43,11 +42,6 @@ public class FODCircleViewImpl extends SystemUI implements CommandQueue.Callback
 
     @Override
     public void start() {
-        PackageManager packageManager = mContext.getPackageManager();
-        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_FINGERPRINT) ||
-                !packageManager.hasSystemFeature(PackageManager.FEATURE_FINGERPRINT_DISPLAY)) {
-            return;
-        }
         mCommandQueue.addCallback(this);
         try {
             mFodCircleView = new FODCircleView(mContext);

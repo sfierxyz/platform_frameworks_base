@@ -107,7 +107,6 @@ public class FingerprintService extends BiometricServiceBase {
     private static final long FAIL_LOCKOUT_TIMEOUT_MS = 30 * 1000;
     private static final String KEY_LOCKOUT_RESET_USER = "lockout_reset_user";
 
-    private final boolean mHasFod;
     private boolean mIsKeyguard;
 
     private final class ResetFailedAttemptsForUserRunnable implements Runnable {
@@ -596,7 +595,7 @@ public class FingerprintService extends BiometricServiceBase {
                         new Fingerprint(getBiometricUtils().getUniqueName(getContext(), groupId),
                                 groupId, fingerId, deviceId);
                 FingerprintService.super.handleEnrollResult(fingerprint, remaining);
-                if (remaining == 0 && mHasFod) {
+                if (remaining == 0) {
                     IFingerprintInscreen fodDaemon = getFingerprintInScreenDaemon();
                     if (fodDaemon != null) {
                         try {
@@ -642,7 +641,7 @@ public class FingerprintService extends BiometricServiceBase {
             mHandler.post(() -> {
                 Fingerprint fp = new Fingerprint("", groupId, fingerId, deviceId);
                 FingerprintService.super.handleAuthenticated(fp, token);
-                if (mHasFod && fp.getBiometricId() != 0) {
+                if (fp.getBiometricId() != 0) {
                     try {
                         mStatusBarService.hideInDisplayFingerprintView();
                     } catch (RemoteException e) {
@@ -712,23 +711,21 @@ public class FingerprintService extends BiometricServiceBase {
                 Slog.w(TAG, "authenticate(): no fingerprint HAL!");
                 return ERROR_ESRCH;
             }
-            if (mHasFod) {
-                IFingerprintInscreen fodDaemon = getFingerprintInScreenDaemon();
-                if (fodDaemon != null) {
-                    try {
-                        fodDaemon.setLongPressEnabled(mIsKeyguard);
-                    } catch (RemoteException e) {
-                        Slog.e(TAG, "setLongPressEnabled failed", e);
-                    }
-                }
+            IFingerprintInscreen fodDaemon = getFingerprintInScreenDaemon();
+            if (fodDaemon != null) {
                 try {
-                    mStatusBarService.showInDisplayFingerprintView();
+                    fodDaemon.setLongPressEnabled(mIsKeyguard);
                 } catch (RemoteException e) {
-                    Slog.e(TAG, "showInDisplayFingerprintView failed", e);
+                    Slog.e(TAG, "setLongPressEnabled failed", e);
                 }
             }
-            return daemon.authenticate(operationId, groupId);
+            try {
+                mStatusBarService.showInDisplayFingerprintView();
+            } catch (RemoteException e) {
+                Slog.e(TAG, "showInDisplayFingerprintView failed", e);
+            }
         }
+        return daemon.authenticate(operationId, groupId);
 
         @Override
         public int cancel() throws RemoteException {
@@ -737,15 +734,13 @@ public class FingerprintService extends BiometricServiceBase {
                 Slog.w(TAG, "cancel(): no fingerprint HAL!");
                 return ERROR_ESRCH;
             }
-            if (mHasFod) {
-                try {
-                    mStatusBarService.hideInDisplayFingerprintView();
-                } catch (RemoteException e) {
-                    Slog.e(TAG, "hideInDisplayFingerprintView failed", e);
-                }
+            try {
+                mStatusBarService.hideInDisplayFingerprintView();
+            } catch (RemoteException e) {
+                Slog.e(TAG, "hideInDisplayFingerprintView failed", e);
             }
-            return daemon.cancel();
         }
+        return daemon.cancel();
 
         @Override
         public int remove(int groupId, int biometricId) throws RemoteException {
@@ -775,23 +770,21 @@ public class FingerprintService extends BiometricServiceBase {
                 Slog.w(TAG, "enroll(): no fingerprint HAL!");
                 return ERROR_ESRCH;
             }
-            if (mHasFod) {
-                IFingerprintInscreen fodDaemon = getFingerprintInScreenDaemon();
-                if (fodDaemon != null) {
-                    try {
-                        fodDaemon.onStartEnroll();
-                    } catch (RemoteException e) {
-                        Slog.e(TAG, "onStartEnroll failed", e);
-                    }
-                }
+            IFingerprintInscreen fodDaemon = getFingerprintInScreenDaemon();
+            if (fodDaemon != null) {
                 try {
-                    mStatusBarService.showInDisplayFingerprintView();
+                    fodDaemon.onStartEnroll();
                 } catch (RemoteException e) {
-                    Slog.e(TAG, "showInDisplayFingerprintView failed", e);
+                    Slog.e(TAG, "onStartEnroll failed", e);
                 }
             }
-            return daemon.enroll(cryptoToken, groupId, timeout);
+            try {
+                mStatusBarService.showInDisplayFingerprintView();
+            } catch (RemoteException e) {
+                Slog.e(TAG, "showInDisplayFingerprintView failed", e);
+            }
         }
+        return daemon.enroll(cryptoToken, groupId, timeout);
 
         @Override
         public void resetLockout(byte[] token) throws RemoteException {
@@ -808,9 +801,6 @@ public class FingerprintService extends BiometricServiceBase {
         mAlarmManager = context.getSystemService(AlarmManager.class);
         context.registerReceiver(mLockoutReceiver, new IntentFilter(getLockoutResetIntent()),
                 getLockoutBroadcastPermission(), null /* handler */);
-
-        PackageManager packageManager = context.getPackageManager();
-        mHasFod = packageManager.hasSystemFeature(PackageManager.FEATURE_FINGERPRINT_DISPLAY);
     }
 
     @Override
@@ -1034,10 +1024,6 @@ public class FingerprintService extends BiometricServiceBase {
     }
 
     private synchronized IFingerprintInscreen getFingerprintInScreenDaemon() {
-        if (!mHasFod) {
-            return null;
-        }
-
         if (mFingerprintInscreenDaemon == null) {
             try {
                 mFingerprintInscreenDaemon = IFingerprintInscreen.getService();
